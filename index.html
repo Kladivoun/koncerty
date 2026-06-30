@@ -194,6 +194,24 @@ main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 }
 .img-clear-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ======= FIND LOGO ======= */
+.find-logo-btn {
+  background: none; border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text-secondary); padding: 6px 12px; cursor: pointer; font-size: 13px;
+  transition: all 0.2s; white-space: nowrap;
+}
+.find-logo-btn:hover { border-color: var(--accent); color: var(--accent); }
+.logo-cand-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; margin-top: 8px; }
+.logo-cand {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px; cursor: pointer;
+  text-align: center; transition: all 0.2s; background: var(--bg-secondary);
+}
+.logo-cand:hover { border-color: var(--accent); box-shadow: var(--shadow-accent); transform: translateY(-2px); }
+.logo-cand-img { height: 90px; display: flex; align-items: center; justify-content: center; margin-bottom: 6px; }
+.logo-cand-img img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.logo-cand-label { font-size: 11px; color: var(--text-secondary); }
+.logo-loading { text-align: center; color: var(--text-secondary); padding: 30px; grid-column: 1 / -1; }
+
 /* ======= PHOTOS SECTION ======= */
 .photos-section { margin-top: 6px; }
 .photos-grid-edit {
@@ -909,7 +927,7 @@ img, video { max-width: 100%; }
 
 </main>
 
-<footer>&copy; 2026 <span>KeCl</span> &nbsp;|&nbsp; v<span>2.3</span></footer>
+<footer>&copy; 2026 <span>KeCl</span> &nbsp;|&nbsp; v<span>2.4</span></footer>
 
 <!-- ===== MODAL: PŘIDAT/EDITOVAT KONCERT ===== -->
 <div class="modal-overlay" id="concertModal">
@@ -950,6 +968,7 @@ img, video { max-width: 100%; }
                     📁 Nahrát soubor
                     <input type="file" accept="image/*" id="f_bandImgFile" onchange="onBandImgFileChange(event)">
                   </label>
+                  <button type="button" class="find-logo-btn" onclick="openLogoPicker('concert')">🔍 Najít logo</button>
                   <button type="button" class="img-clear-btn" onclick="clearBandImg()">✕ Smazat</button>
                 </div>
               </div>
@@ -1072,6 +1091,7 @@ img, video { max-width: 100%; }
                 📁 Nahrát soubor
                 <input type="file" accept="image/*" id="be_imgFile" onchange="onBandEditImgFileChange(event)">
               </label>
+              <button type="button" class="find-logo-btn" onclick="openLogoPicker('bandEdit')">🔍 Najít logo</button>
               <button type="button" class="img-clear-btn" onclick="clearBandEditImg()">✕ Smazat</button>
             </div>
           </div>
@@ -1087,6 +1107,16 @@ img, video { max-width: 100%; }
       <button class="btn btn-primary" onclick="saveBandEdit()">💾 Uložit</button>
       <button class="btn btn-secondary" onclick="closeModal('bandEditModal')">Zrušit</button>
     </div>
+  </div>
+</div>
+
+<!-- ===== MODAL: NAJÍT LOGO ===== -->
+<div class="modal-overlay" id="logoPickerModal">
+  <div class="modal" style="max-width:560px;">
+    <button class="modal-close" onclick="closeModal('logoPickerModal')">✕</button>
+    <h2 id="logoPickerTitle">🔍 Najít logo</h2>
+    <p style="font-size:13px;color:var(--text-secondary);margin:4px 0 12px;">Klikni na obrázek, který chceš použít. 🎯 Loga (Wikidata) bývají průhledná PNG, 📷 fotky (Deezer) jsou čtvercové.</p>
+    <div class="logo-cand-grid" id="logoPickerGrid"></div>
   </div>
 </div>
 
@@ -1342,7 +1372,7 @@ const ImageDB = (() => {
 // ================================================================
 // APP STATE
 // ================================================================
-const VERSION = '2.3';
+const VERSION = '2.4';
 let data = JSON.parse(localStorage.getItem('kk_data') || '{"concerts":[],"bandMeta":{},"todos":[]}');
 if (!data.todos) data.todos = [];
 let imgCache = {}; // key -> base64 dataURL (in-memory cache of IndexedDB)
@@ -2501,6 +2531,105 @@ function openBandDetail(bandName) {
 
   document.getElementById('bandContent').innerHTML = html;
   openModal('bandModal');
+}
+
+// ================================================================
+// NAJÍT LOGO (Wikidata logo + Deezer foto)
+// ================================================================
+let logoPickerTarget = null;   // 'concert' | 'bandEdit'
+let logoCands = [];
+
+function openLogoPicker(target) {
+  const name = (target === 'concert')
+    ? document.getElementById('f_band').value.trim()
+    : document.getElementById('be_bandName').value.trim();
+  if (!name) { showToast('⚠️ Nejdřív zadej název kapely'); return; }
+  logoPickerTarget = target;
+  document.getElementById('logoPickerTitle').textContent = '🔍 ' + name;
+  document.getElementById('logoPickerGrid').innerHTML = '<div class="logo-loading">⏳ Hledám loga…</div>';
+  openModal('logoPickerModal');
+  loadLogoCandidates(name);
+}
+
+// JSONP – obejde CORS (potřeba pro Deezer)
+function jsonp(url, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    const cb = '_jsonp_' + Math.random().toString(36).slice(2);
+    const sep = url.includes('?') ? '&' : '?';
+    const script = document.createElement('script');
+    const timer = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, timeout);
+    function cleanup() { clearTimeout(timer); try { delete window[cb]; } catch(e){} script.remove(); }
+    window[cb] = (data) => { cleanup(); resolve(data); };
+    script.onerror = () => { cleanup(); reject(new Error('jsonp error')); };
+    script.src = url + sep + 'output=jsonp&callback=' + cb;
+    document.body.appendChild(script);
+  });
+}
+
+function commonsUrl(filename) {
+  return 'https://commons.wikimedia.org/wiki/Special:FilePath/' + encodeURIComponent(filename) + '?width=500';
+}
+
+// Wikidata: property P154 = logo image (průhledné PNG/SVG na Wikimedia Commons)
+async function fetchWikidataLogos(name) {
+  const sUrl = 'https://www.wikidata.org/w/api.php?action=wbsearchentities&search='
+    + encodeURIComponent(name) + '&language=en&uselang=en&type=item&format=json&origin=*&limit=5';
+  const sr = await fetch(sUrl).then(r => r.json());
+  const ids = (sr.search || []).map(s => s.id).slice(0, 5);
+  if (!ids.length) return [];
+  const eUrl = 'https://www.wikidata.org/w/api.php?action=wbgetentities&ids=' + ids.join('|')
+    + '&props=claims&format=json&origin=*';
+  const er = await fetch(eUrl).then(r => r.json());
+  const out = [];
+  for (const id of ids) {
+    const claims = er.entities?.[id]?.claims || {};
+    const logo = claims.P154?.[0]?.mainsnak?.datavalue?.value;   // logo image
+    if (logo) out.push(commonsUrl(logo));
+  }
+  return out;
+}
+
+// Deezer: foto interpreta (picture_xl ~1000px)
+async function fetchDeezerPhotos(name) {
+  const data = await jsonp('https://api.deezer.com/search/artist?q=' + encodeURIComponent(name) + '&limit=3');
+  return (data.data || []).map(a => a.picture_xl || a.picture_big).filter(Boolean);
+}
+
+async function loadLogoCandidates(name) {
+  logoCands = [];
+  const grid = document.getElementById('logoPickerGrid');
+  const render = () => {
+    grid.innerHTML = logoCands.map((c, i) =>
+      `<div class="logo-cand" onclick="pickLogo(${i})">
+         <div class="logo-cand-img"><img src="${escAttr(c.url)}" loading="lazy" onerror="this.closest('.logo-cand').style.display='none'"></div>
+         <div class="logo-cand-label">${c.label}</div>
+       </div>`).join('');
+  };
+  await Promise.allSettled([
+    fetchWikidataLogos(name).then(list => { list.forEach(u => logoCands.push({ url: u, label: '🎯 Logo (Wikidata)' })); render(); }),
+    fetchDeezerPhotos(name).then(list  => { list.forEach(u => logoCands.push({ url: u, label: '📷 Foto (Deezer)' }));  render(); })
+  ]);
+  if (!logoCands.length) {
+    grid.innerHTML = '<div class="logo-loading">😕 Nic jsem nenašel. Zkus upravit název kapely nebo zadej URL ručně.</div>';
+  }
+}
+
+function pickLogo(i) {
+  const c = logoCands[i];
+  if (!c) return;
+  if (logoPickerTarget === 'concert') {
+    tempBandImg = { ref: c.url, file: null, preview: c.url };
+    document.getElementById('f_bandImgUrl').value = c.url;
+    document.getElementById('f_bandImgFile').value = '';
+    updateBandImgPreview();
+  } else {
+    tempBandEditImg = { ref: c.url, file: null, preview: c.url };
+    document.getElementById('be_imgUrl').value = c.url;
+    document.getElementById('be_imgFile').value = '';
+    updateBandEditImgPreview();
+  }
+  closeModal('logoPickerModal');
+  showToast('✅ Obrázek vybrán — nezapomeň uložit');
 }
 
 // ================================================================
