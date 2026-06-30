@@ -927,7 +927,7 @@ img, video { max-width: 100%; }
 
 </main>
 
-<footer>&copy; 2026 <span>KeCl</span> &nbsp;|&nbsp; v<span>2.4</span></footer>
+<footer>&copy; 2026 <span>KeCl</span> &nbsp;|&nbsp; v<span>2.5</span></footer>
 
 <!-- ===== MODAL: PŘIDAT/EDITOVAT KONCERT ===== -->
 <div class="modal-overlay" id="concertModal">
@@ -1115,8 +1115,11 @@ img, video { max-width: 100%; }
   <div class="modal" style="max-width:560px;">
     <button class="modal-close" onclick="closeModal('logoPickerModal')">✕</button>
     <h2 id="logoPickerTitle">🔍 Najít logo</h2>
-    <p style="font-size:13px;color:var(--text-secondary);margin:4px 0 12px;">Klikni na obrázek, který chceš použít. 🎯 Loga (Wikidata) bývají průhledná PNG, 📷 fotky (Deezer) jsou čtvercové.</p>
+    <p style="font-size:13px;color:var(--text-secondary);margin:4px 0 12px;">Klikni na obrázek, který chceš použít. 🏆 fanart.tv a 🎯 Wikidata jsou průhledná loga, 📷 Deezer je čtvercová fotka.</p>
     <div class="logo-cand-grid" id="logoPickerGrid"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button type="button" class="find-logo-btn" onclick="setFanartKey()">🔑 fanart.tv klíč</button>
+    </div>
   </div>
 </div>
 
@@ -1372,7 +1375,7 @@ const ImageDB = (() => {
 // ================================================================
 // APP STATE
 // ================================================================
-const VERSION = '2.4';
+const VERSION = '2.5';
 let data = JSON.parse(localStorage.getItem('kk_data') || '{"concerts":[],"bandMeta":{},"todos":[]}');
 if (!data.todos) data.todos = [];
 let imgCache = {}; // key -> base64 dataURL (in-memory cache of IndexedDB)
@@ -2595,6 +2598,38 @@ async function fetchDeezerPhotos(name) {
   return (data.data || []).map(a => a.picture_xl || a.picture_big).filter(Boolean);
 }
 
+// fanart.tv: skutečná průhledná loga (hdmusiclogo/musiclogo). Nejdřív MBID přes MusicBrainz.
+function getFanartKey() { try { return localStorage.getItem('fanartKey') || ''; } catch(e) { return ''; } }
+function setFanartKey() {
+  const cur = getFanartKey();
+  const k = prompt('Vlož fanart.tv API klíč.\n(Zdarma: účet na fanart.tv → Account → API → "Add application" → zkopíruj "project key".)', cur);
+  if (k === null) return;
+  try { localStorage.setItem('fanartKey', k.trim()); } catch(e) {}
+  showToast(k.trim() ? '✅ fanart.tv klíč uložen' : '🗑 Klíč smazán');
+  const name = document.getElementById('logoPickerTitle').textContent.replace(/^🔍\s*/, '').trim();
+  if (name) { document.getElementById('logoPickerGrid').innerHTML = '<div class="logo-loading">⏳ Hledám loga…</div>'; loadLogoCandidates(name); }
+}
+async function fetchFanartLogos(name) {
+  const key = getFanartKey();
+  if (!key) return [];
+  const mbUrl = 'https://musicbrainz.org/ws/2/artist/?query=' + encodeURIComponent('artist:"' + name + '"') + '&fmt=json&limit=3';
+  const mb = await fetch(mbUrl, { headers: { 'Accept': 'application/json' } }).then(r => r.json());
+  const artists = mb.artists || [];
+  const out = [], seen = new Set();
+  for (const a of artists.slice(0, 2)) {
+    try {
+      const fa = await fetch('https://webservice.fanart.tv/v3/music/' + a.id + '?api_key=' + encodeURIComponent(key))
+        .then(r => r.ok ? r.json() : null);
+      if (!fa) continue;
+      [...(fa.hdmusiclogo || []), ...(fa.musiclogo || [])].forEach(l => {
+        if (l.url && !seen.has(l.url)) { seen.add(l.url); out.push(l.url); }
+      });
+      if (out.length) break;   // máme loga z nejlepší shody
+    } catch(e) {}
+  }
+  return out;
+}
+
 async function loadLogoCandidates(name) {
   logoCands = [];
   const grid = document.getElementById('logoPickerGrid');
@@ -2606,6 +2641,7 @@ async function loadLogoCandidates(name) {
        </div>`).join('');
   };
   await Promise.allSettled([
+    fetchFanartLogos(name).then(list   => { list.forEach(u => logoCands.push({ url: u, label: '🏆 Logo (fanart.tv)' })); render(); }),
     fetchWikidataLogos(name).then(list => { list.forEach(u => logoCands.push({ url: u, label: '🎯 Logo (Wikidata)' })); render(); }),
     fetchDeezerPhotos(name).then(list  => { list.forEach(u => logoCands.push({ url: u, label: '📷 Foto (Deezer)' }));  render(); })
   ]);
